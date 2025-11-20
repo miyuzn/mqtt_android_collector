@@ -81,6 +81,21 @@
                 android:textAppearance="?attr/textAppearanceBodyLarge"
                 tools:text="@string/bridge_state_idle" />
 
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/localModeSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/local_mode_switch_label" />
+
+            <TextView
+                android:id="@+id/localStorePath"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textAppearance="?attr/textAppearanceBodySmall"
+                tools:text="Path: /storage/emulated/0/Android/data/.../mqtt_store" />
+
             <com.google.android.material.textfield.TextInputLayout
                 android:id="@+id/brokerHostLayout"
                 style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"

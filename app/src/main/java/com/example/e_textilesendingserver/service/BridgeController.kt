@@ -6,7 +6,9 @@ import com.example.e_textilesendingserver.core.config.BridgeConfigRepository
 import com.example.e_textilesendingserver.core.parser.SensorParser
 import com.example.e_textilesendingserver.core.parser.toJsonBytes
 import com.example.e_textilesendingserver.data.DeviceRegistry
+import com.example.e_textilesendingserver.data.LocalStore
 import com.example.e_textilesendingserver.mqtt.MqttBridge
+import java.io.File
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -49,9 +51,10 @@ class BridgeController(
 
     fun start() {
         if (runningJob != null) return
-        BridgeStatusStore.update(BridgeState.Starting)
+        BridgeStatusStore.update(BridgeState.Starting(configRepository.config.value.localMode))
         val job = scope.launch {
             val config = configRepository.config.first()
+            BridgeStatusStore.update(BridgeState.Starting(config.localMode))
             runBridge(config)
         }
         job.invokeOnCompletion {
@@ -74,8 +77,16 @@ class BridgeController(
         val rawAggregator = RawAggregator(config)
         val packetQueue = PacketQueue(config.queueSize, config.dropOldest)
         val subscriptionManager = GcuSubscriptionManager(config)
+        val localStore = if (config.localMode) {
+            LocalStore(File(config.localStoreRoot), config.localFlushEveryRows, config.localInactTimeoutSec)
+        } else {
+            null
+        }
+        val mqttEnabled = !config.localMode
         try {
-            mqttBridge.connect(config)
+            if (mqttEnabled) {
+                mqttBridge.connect(config)
+            }
             subscriptionManager.start(scope)
             BridgeStatusStore.update(
                 BridgeState.Running(
@@ -83,24 +94,29 @@ class BridgeController(
                         packetsIn = 0,
                         parsedPublished = 0,
                         rawPublished = 0,
+                        stored = 0,
                         dropped = 0,
                         parseErrors = 0,
                         deviceCount = 0,
                         lastUpdateMillis = System.currentTimeMillis(),
-                    )
+                    ),
+                    localMode = config.localMode,
                 )
             )
             kotlinx.coroutines.coroutineScope {
-                launch { publishRegistryLoop(config, registry) }
-                launch { subscribeCommands(config, registry) }
+                if (mqttEnabled) {
+                    launch { publishRegistryLoop(config, registry) }
+                    launch { subscribeCommands(config, registry) }
+                }
                 launch { udpLoop(config, packetQueue, stats, subscriptionManager) }
-                launch { mqttWorker(config, registry, stats, rawAggregator, packetQueue) }
+                launch { mqttWorker(config, registry, stats, rawAggregator, packetQueue, localStore, mqttEnabled) }
             }
         } catch (ex: CancellationException) {
             throw ex
         } catch (ex: Exception) {
             BridgeStatusStore.update(BridgeState.Error(ex.message ?: "发生未知错误"))
         } finally {
+            localStore?.close()
             mqttBridge.disconnect()
             subscriptionManager.stop()
             if (BridgeStatusStore.state.value !is BridgeState.Error) {
@@ -173,55 +189,79 @@ class BridgeController(
         stats: StatsTracker,
         rawAggregator: RawAggregator,
         packetQueue: PacketQueue,
+        localStore: LocalStore?,
+        mqttEnabled: Boolean,
     ) = withContext(Dispatchers.IO) {
         val pollTimeout = max(config.batchMaxMs, PACKET_POLL_TIMEOUT_MS)
-        val rawPublisher: suspend (ByteArray, Int) -> Unit = { payload, count ->
-            mqttBridge.publish(config.topicRaw, payload, config.mqttQos)
-            stats.onRawPublished(count)
-        }
+        val shouldPublishRaw = mqttEnabled && config.publishRaw
+        val shouldPublishParsed = mqttEnabled && config.publishParsed
+        val shouldParse = shouldPublishParsed || localStore != null || !config.publishRaw
 
         try {
             while (scope.isActive) {
                 val packet = packetQueue.poll(pollTimeout)
                 if (packet == null) {
-                    rawAggregator.flushIfTimedOut(rawPublisher)
+                    if (shouldPublishRaw) {
+                        rawAggregator.flushIfTimedOut { payload, count ->
+                            mqttBridge.publish(config.topicRaw, payload, config.mqttQos)
+                            stats.onRawPublished(count)
+                        }
+                    }
                     stats.maybeEmit()
                     continue
                 }
 
                 stats.onPacketIn()
                 val payload = packet.payload
-                if (config.publishRaw) {
-                    rawAggregator.enqueue(payload, rawPublisher)
+                if (shouldPublishRaw) {
+                    rawAggregator.enqueue(payload) { body, count ->
+                        mqttBridge.publish(config.topicRaw, body, config.mqttQos)
+                        stats.onRawPublished(count)
+                    }
                 }
 
-                if (config.publishParsed) {
+                val host = packet.address.hostAddress
+                if (shouldParse) {
                     val frame = parser.parse(payload)
                     if (frame != null) {
-                        val host = packet.address.hostAddress
                         if (!host.isNullOrBlank()) {
                             registry.record(frame.dn, host)
                         }
-                        val topic = "${config.topicParsedPrefix.trimEnd('/')}/${frame.dn}"
-                        val jsonBytes = frame.toJsonBytes()
-                        mqttBridge.publish(topic, jsonBytes, config.mqttQos)
-                        stats.onParsedPublished()
+                        if (shouldPublishParsed) {
+                            val topic = "${config.topicParsedPrefix.trimEnd('/')}/${frame.dn}"
+                            val jsonBytes = frame.toJsonBytes()
+                            mqttBridge.publish(topic, jsonBytes, config.mqttQos)
+                            stats.onParsedPublished()
+                        }
+                        if (localStore != null) {
+                            localStore.write(frame)
+                            stats.onStored()
+                        }
                     } else {
                         stats.onParseError()
                     }
                 } else {
                     val metadata = parser.peekMetadata(payload)
-                    val host = packet.address.hostAddress
                     if (metadata != null && !host.isNullOrBlank()) {
                         registry.record(metadata.dn, host)
                     }
                 }
 
-                rawAggregator.flushIfTimedOut(rawPublisher)
+                if (shouldPublishRaw) {
+                    rawAggregator.flushIfTimedOut { body, count ->
+                        mqttBridge.publish(config.topicRaw, body, config.mqttQos)
+                        stats.onRawPublished(count)
+                    }
+                }
                 stats.maybeEmit()
             }
         } finally {
-            rawAggregator.flushRemaining(rawPublisher)
+            if (shouldPublishRaw) {
+                rawAggregator.flushRemaining { body, count ->
+                    mqttBridge.publish(config.topicRaw, body, config.mqttQos)
+                    stats.onRawPublished(count)
+                }
+            }
         }
     }
 
@@ -467,6 +507,7 @@ class BridgeController(
         private var packetsIn = 0L
         private var parsed = 0L
         private var raw = 0L
+        private var stored = 0L
         private var dropped = 0L
         private var parseErrors = 0L
 
@@ -480,6 +521,10 @@ class BridgeController(
 
         fun onRawPublished(payloadCount: Int) {
             raw += payloadCount
+        }
+
+        fun onStored() {
+            stored++
         }
 
         fun onDropped() {
@@ -501,11 +546,13 @@ class BridgeController(
                         packetsIn = packetsIn,
                         parsedPublished = parsed,
                         rawPublished = raw,
+                        stored = stored,
                         dropped = dropped,
                         parseErrors = parseErrors,
                         deviceCount = deviceCount,
                         lastUpdateMillis = now,
-                    )
+                    ),
+                    localMode = config.localMode,
                 )
             )
         }

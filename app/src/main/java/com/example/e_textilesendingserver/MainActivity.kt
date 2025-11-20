@@ -68,12 +68,14 @@ class MainActivity : AppCompatActivity() {
             openProvisioning()
         }
         binding.startButton.setOnClickListener {
-            val endpoint = validateBrokerInput() ?: return@setOnClickListener
+            val localMode = binding.localModeSwitch.isChecked
+            val endpoint = if (localMode) null else validateBrokerInput() ?: return@setOnClickListener
             lifecycleScope.launch {
                 configRepository.update { config ->
                     config.copy(
-                        brokerHost = endpoint.first,
-                        brokerPort = endpoint.second,
+                        brokerHost = endpoint?.first ?: config.brokerHost,
+                        brokerPort = endpoint?.second ?: config.brokerPort,
+                        localMode = localMode,
                     )
                 }
                 requestNotificationPermissionIfNeeded()
@@ -81,6 +83,10 @@ class MainActivity : AppCompatActivity() {
         }
         binding.stopButton.setOnClickListener {
             stopService(Intent(this, BridgeService::class.java))
+        }
+        binding.localModeSwitch.setOnCheckedChangeListener { _, isChecked ->
+            val currentRoot = configRepository.config.value.localStoreRoot
+            updateModeUi(isChecked, currentRoot)
         }
 
         lifecycleScope.launch {
@@ -94,6 +100,7 @@ class MainActivity : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 configRepository.config.collect { config ->
                     updateBrokerInputs(config.brokerHost, config.brokerPort)
+                    updateModeUi(config.localMode, config.localStoreRoot)
                 }
             }
         }
@@ -128,16 +135,29 @@ class MainActivity : AppCompatActivity() {
     private fun updateState(state: BridgeState) {
         val message = when (state) {
             BridgeState.Idle -> getString(R.string.bridge_state_idle)
-            BridgeState.Starting -> getString(R.string.bridge_state_starting)
+            is BridgeState.Starting -> if (state.localMode) {
+                getString(R.string.bridge_state_starting_local)
+            } else {
+                getString(R.string.bridge_state_starting)
+            }
             is BridgeState.Running -> {
                 val m = state.metrics
-                getString(
-                    R.string.bridge_state_running_template,
-                    m.packetsIn,
-                    m.parsedPublished,
-                    m.rawPublished,
-                    m.deviceCount,
-                )
+                if (state.localMode) {
+                    getString(
+                        R.string.bridge_state_running_local_template,
+                        m.packetsIn,
+                        m.stored,
+                        m.deviceCount,
+                    )
+                } else {
+                    getString(
+                        R.string.bridge_state_running_template,
+                        m.packetsIn,
+                        m.parsedPublished,
+                        m.rawPublished,
+                        m.deviceCount,
+                    )
+                }
             }
             is BridgeState.Error -> getString(R.string.bridge_state_error, state.message)
         }
@@ -174,6 +194,23 @@ class MainActivity : AppCompatActivity() {
     private fun updateBrokerInputs(host: String, port: Int) {
         setTextIfNeeded(binding.brokerHostInput, host)
         setTextIfNeeded(binding.brokerPortInput, port.toString())
+    }
+
+    private fun updateModeUi(localMode: Boolean, storeRoot: String) {
+        binding.localModeSwitch.isChecked = localMode
+        binding.brokerHostLayout.isEnabled = !localMode
+        binding.brokerPortLayout.isEnabled = !localMode
+        binding.startButton.text = if (localMode) {
+            getString(R.string.action_start_local)
+        } else {
+            getString(R.string.action_start_bridge)
+        }
+        binding.hintText.text = if (localMode) {
+            getString(R.string.local_mode_hint)
+        } else {
+            getString(R.string.bridge_hint)
+        }
+        binding.localStorePath.text = getString(R.string.local_store_path, storeRoot)
     }
 
     private fun setTextIfNeeded(view: EditText, newValue: String) {

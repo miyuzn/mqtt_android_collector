@@ -37,11 +37,30 @@ class BridgeNotificationHelper(private val context: Context) {
         val contentText = when (state) {
             is BridgeState.Running -> {
                 val metrics = state.metrics
-                "UDP ${metrics.packetsIn} / MQTT ${metrics.parsedPublished} / 设备 ${metrics.deviceCount}"
+                if (state.localMode) {
+                    context.getString(
+                        R.string.bridge_state_running_local_template,
+                        metrics.packetsIn,
+                        metrics.stored,
+                        metrics.deviceCount,
+                    )
+                } else {
+                    context.getString(
+                        R.string.bridge_state_running_template,
+                        metrics.packetsIn,
+                        metrics.parsedPublished,
+                        metrics.rawPublished,
+                        metrics.deviceCount,
+                    )
+                }
             }
-            is BridgeState.Error -> "错误: ${state.message}"
-            BridgeState.Starting -> "正在连接 MQTT / UDP"
-            BridgeState.Idle -> "已停止"
+            is BridgeState.Error -> context.getString(R.string.bridge_state_error, state.message)
+            is BridgeState.Starting -> if (state.localMode) {
+                context.getString(R.string.bridge_state_starting_local)
+            } else {
+                context.getString(R.string.bridge_state_starting)
+            }
+            BridgeState.Idle -> context.getString(R.string.bridge_state_idle)
         }
         return NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
