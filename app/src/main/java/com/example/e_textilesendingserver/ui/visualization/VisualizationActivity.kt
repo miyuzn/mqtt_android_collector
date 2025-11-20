@@ -1,9 +1,16 @@
 package com.example.e_textilesendingserver.ui.visualization
 
+import android.content.pm.ActivityInfo
 import android.os.Bundle
+import android.view.ViewGroup
 import android.widget.ArrayAdapter
+import android.widget.LinearLayout
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
+import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
 import com.example.e_textilesendingserver.R
 import com.example.e_textilesendingserver.core.parser.SensorFrame
@@ -11,12 +18,12 @@ import com.example.e_textilesendingserver.data.FramePreviewStore
 import com.example.e_textilesendingserver.databinding.ActivityVisualizationBinding
 import com.example.e_textilesendingserver.ui.widget.CopBoardView
 import com.example.e_textilesendingserver.ui.widget.HeatmapView
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 import java.util.Locale
-import kotlin.math.max
-import kotlin.math.min
 
 class VisualizationActivity : AppCompatActivity() {
 
@@ -25,24 +32,34 @@ class VisualizationActivity : AppCompatActivity() {
     private val panelB = PanelState("secondary")
     private var collectJob: Job? = null
     private var dualMode = false
+    private var lastDeviceDns: List<String> = emptyList()
+    private var initialOrientation: Int = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        initialOrientation = savedInstanceState?.getInt(STATE_INITIAL_ORIENTATION) ?: requestedOrientation
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         binding = ActivityVisualizationBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        applyWindowInsets()
         setupToolbar()
         setupControls()
     }
 
+    @OptIn(FlowPreview::class)
     override fun onStart() {
         super.onStart()
         FramePreviewStore.setEnabled(true)
         collectJob = lifecycleScope.launch {
-            FramePreviewStore.state.collectLatest { map ->
-                val devices = map.values.sortedByDescending { it.receivedAt }
-                updateDeviceSelectors(devices.map { it.frame.dn })
-                updatePanels(devices.associateBy { it.frame.dn })
-            }
+            FramePreviewStore.state
+                .sample(FRAME_SAMPLE_MS)
+                .collectLatest { map ->
+                    val now = System.currentTimeMillis()
+                    val fresh = map.filterValues { now - it.receivedAt <= DEVICE_STALE_MS }
+                    val devices = fresh.keys.sorted()
+                    updateDeviceSelectors(devices)
+                    updatePanels(fresh)
+                }
         }
     }
 
@@ -51,6 +68,11 @@ class VisualizationActivity : AppCompatActivity() {
         collectJob = null
         FramePreviewStore.setEnabled(false)
         super.onStop()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt(STATE_INITIAL_ORIENTATION, initialOrientation)
+        super.onSaveInstanceState(outState)
     }
 
     private fun setupToolbar() {
@@ -62,15 +84,60 @@ class VisualizationActivity : AppCompatActivity() {
 
     private fun setupControls() {
         binding.dualSwitch.setOnCheckedChangeListener { _, checked ->
-            dualMode = checked
-            binding.panelSecondary.root.isVisible = checked
+            applyDualMode(checked)
         }
+        applyDualMode(binding.dualSwitch.isChecked)
         binding.resetRangeButton.setOnClickListener {
             binding.pressureMin.setText(DEFAULT_MIN.toString())
             binding.pressureMax.setText(DEFAULT_MAX.toString())
         }
         setupPanelUi(panelA, binding.panelPrimary.telemetryHeatmap, binding.panelPrimary.copBoard)
         setupPanelUi(panelB, binding.panelSecondary.telemetryHeatmap, binding.panelSecondary.copBoard)
+    }
+
+    private fun applyWindowInsets() {
+        val toolbarInitialTop = binding.toolbar.paddingTop
+        val contentInitialBottom = binding.contentScroll.paddingBottom
+        ViewCompat.setOnApplyWindowInsetsListener(binding.toolbar) { view, windowInsets ->
+            val insets = windowInsets.getInsets(WindowInsetsCompat.Type.statusBars())
+            view.updatePadding(top = toolbarInitialTop + insets.top)
+            windowInsets
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(binding.contentScroll) { view, windowInsets ->
+            val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.updatePadding(bottom = contentInitialBottom + insets.bottom)
+            windowInsets
+        }
+    }
+
+    private fun applyDualMode(enabled: Boolean) {
+        dualMode = enabled
+        binding.panelSecondary.root.isVisible = enabled
+        binding.panelContainer.orientation = if (enabled) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+        updatePanelWeights(enabled)
+        requestedOrientation = if (enabled) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            initialOrientation
+        }
+    }
+
+    private fun updatePanelWeights(horizontal: Boolean) {
+        val primaryParams = binding.panelPrimary.root.layoutParams as LinearLayout.LayoutParams
+        val secondaryParams = binding.panelSecondary.root.layoutParams as LinearLayout.LayoutParams
+        if (horizontal) {
+            primaryParams.width = 0
+            secondaryParams.width = 0
+            primaryParams.weight = 1f
+            secondaryParams.weight = 1f
+        } else {
+            primaryParams.width = ViewGroup.LayoutParams.MATCH_PARENT
+            secondaryParams.width = ViewGroup.LayoutParams.MATCH_PARENT
+            primaryParams.weight = 0f
+            secondaryParams.weight = 0f
+        }
+        binding.panelPrimary.root.layoutParams = primaryParams
+        binding.panelSecondary.root.layoutParams = secondaryParams
     }
 
     private fun setupPanelUi(panel: PanelState, heatmap: HeatmapView, cop: CopBoardView) {
@@ -107,17 +174,30 @@ class VisualizationActivity : AppCompatActivity() {
     }
 
     private fun updateDeviceSelectors(dns: List<String>) {
-        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, dns)
+        val sorted = dns.sorted()
+        if (sorted == lastDeviceDns) return
+        lastDeviceDns = sorted
+        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, sorted)
         binding.panelPrimary.deviceSelector.setAdapter(adapter)
         binding.panelSecondary.deviceSelector.setAdapter(adapter)
-        if (dns.isNotEmpty()) {
-            binding.panelPrimary.deviceSelector.setText(binding.panelPrimary.deviceSelector.text.takeIf { it.isNotBlank() } ?: dns.first(), false)
-            if (dns.size > 1) {
-                binding.panelSecondary.deviceSelector.setText(binding.panelSecondary.deviceSelector.text.takeIf { it.isNotBlank() } ?: dns[1], false)
-            }
-        } else {
+        if (sorted.isEmpty()) {
+            panelA.selectedDn = null
+            panelB.selectedDn = null
             binding.panelPrimary.deviceSelector.setText("", false)
             binding.panelSecondary.deviceSelector.setText("", false)
+            return
+        }
+        val primaryDn = panelA.selectedDn?.takeIf { sorted.contains(it) } ?: sorted.first()
+        val secondaryDn = panelB.selectedDn?.takeIf { sorted.contains(it) }
+            ?: sorted.getOrNull(1)
+            ?: primaryDn
+        panelA.selectedDn = primaryDn
+        panelB.selectedDn = secondaryDn
+        if (binding.panelPrimary.deviceSelector.text.toString() != primaryDn) {
+            binding.panelPrimary.deviceSelector.setText(primaryDn, false)
+        }
+        if (binding.panelSecondary.deviceSelector.text.toString() != secondaryDn) {
+            binding.panelSecondary.deviceSelector.setText(secondaryDn, false)
         }
     }
 
@@ -168,11 +248,17 @@ class VisualizationActivity : AppCompatActivity() {
 
     private fun updateLayoutSelectorState(state: PanelState, options: List<Pair<Int, Int>>) {
         val layoutSelector = if (state.key == "primary") binding.panelPrimary.layoutSelector else binding.panelSecondary.layoutSelector
-        val texts = options.map { it.toLayoutKey() }
-        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, texts)
-        layoutSelector.setAdapter(adapter)
+        if (options != state.lastLayouts) {
+            val texts = options.map { it.toLayoutKey() }
+            val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, texts)
+            layoutSelector.setAdapter(adapter)
+            state.lastLayouts = options
+        }
         layoutSelector.isEnabled = options.isNotEmpty()
-        layoutSelector.setText(state.selectedLayout ?: "", false)
+        val textValue = state.selectedLayout ?: ""
+        if (layoutSelector.text.toString() != textValue) {
+            layoutSelector.setText(textValue, false)
+        }
     }
 
     private fun renderVectors(panel: PanelState, frame: SensorFrame) {
@@ -197,8 +283,11 @@ class VisualizationActivity : AppCompatActivity() {
     private fun Float.format1(): String = String.format(Locale.US, "%.1f", this.toDouble())
 
     companion object {
+        private const val STATE_INITIAL_ORIENTATION = "visual_initial_orientation"
         private const val DEFAULT_MIN = 300f
         private const val DEFAULT_MAX = 1000f
+        private const val FRAME_SAMPLE_MS = 32L
+        private const val DEVICE_STALE_MS = 5_000L
     }
 
     private data class PanelState(
@@ -207,6 +296,7 @@ class VisualizationActivity : AppCompatActivity() {
         var selectedLayout: String? = null,
         var mirrorRows: Boolean = false,
         var mirrorCols: Boolean = false,
+        var lastLayouts: List<Pair<Int, Int>> = emptyList(),
         var onRender: ((PanelRenderData) -> Unit)? = null,
     )
 

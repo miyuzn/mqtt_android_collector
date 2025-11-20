@@ -334,6 +334,7 @@ class BridgeController(
             return@withContext
         }
         val payloadSection = payload.optJSONObject("payload") ?: JSONObject()
+        val type = payload.optString("type", payloadSection.optString("type")).lowercase()
         val analog = payload.opt("analog") ?: payloadSection.opt("analog")
         val select = payload.opt("select") ?: payloadSection.opt("select")
         val model = payload.opt("model") ?: payloadSection.opt("model")
@@ -351,22 +352,66 @@ class BridgeController(
             )
             return@withContext
         }
-        val payloadString = JSONObject().apply {
-            put("analog", analog)
-            put("select", select)
-            put("model", model)
-        }.toString() + "\n"
+        val port = extractPort(payload, payloadSection, config.deviceTcpPort)
 
         try {
-            val reply = sendConfigPayload(targetIp, config.deviceTcpPort, config.deviceTcpTimeoutSec, payloadString)
-            publishCommandResult(
-                config = config,
-                commandId = commandId,
-                dn = dn,
-                status = "ok",
-                ip = targetIp,
-                extra = reply,
-            )
+            when (type) {
+                "license", "license_apply" -> {
+                    val token = payloadSection.optString("license")
+                        .ifBlank { payloadSection.optString("license_token") }
+                        .ifBlank { payload.optString("license") }
+                    if (token.isBlank()) {
+                        publishCommandResult(
+                            config,
+                            commandId,
+                            status = "error",
+                            dn = dn,
+                            ip = targetIp,
+                            error = "license token required",
+                        )
+                        return@withContext
+                    }
+                    val body = JSONObject().apply { put("license", token) }
+                    val reply = sendTcpJson(targetIp, port, config.deviceTcpTimeoutSec, body)
+                    publishCommandResult(
+                        config = config,
+                        commandId = commandId,
+                        dn = dn,
+                        status = "ok",
+                        ip = targetIp,
+                        extra = reply,
+                    )
+                }
+                "license_query", "license_query_only" -> {
+                    val body = JSONObject().apply { put("license", "?") }
+                    val reply = sendTcpJson(targetIp, port, config.deviceTcpTimeoutSec, body)
+                    publishCommandResult(
+                        config = config,
+                        commandId = commandId,
+                        dn = dn,
+                        status = "ok",
+                        ip = targetIp,
+                        extra = reply,
+                    )
+                }
+                else -> {
+                    val payloadString = JSONObject().apply {
+                        put("analog", analog)
+                        put("select", select)
+                        put("model", model)
+                    }.toString() + "\n"
+
+                    val reply = sendConfigPayload(targetIp, port, config.deviceTcpTimeoutSec, payloadString)
+                    publishCommandResult(
+                        config = config,
+                        commandId = commandId,
+                        dn = dn,
+                        status = "ok",
+                        ip = targetIp,
+                        extra = reply,
+                    )
+                }
+            }
         } catch (ex: Exception) {
             publishCommandResult(
                 config = config,
@@ -404,6 +449,15 @@ class BridgeController(
         }
     }
 
+    private fun extractPort(payload: JSONObject, payloadSection: JSONObject, defaultPort: Int): Int {
+        val portCandidate = payload.opt("port") ?: payloadSection.opt("port")
+        return when (portCandidate) {
+            is Number -> portCandidate.toInt()
+            is String -> portCandidate.toIntOrNull() ?: defaultPort
+            else -> defaultPort
+        }
+    }
+
     private fun sendConfigPayload(
         ip: String,
         port: Int,
@@ -432,6 +486,16 @@ class BridgeController(
         } finally {
             kotlin.runCatching { socket.close() }
         }
+    }
+
+    private fun sendTcpJson(
+        ip: String,
+        port: Int,
+        timeoutSec: Double,
+        json: JSONObject,
+    ): JSONObject {
+        val body = json.toString() + "\n"
+        return sendConfigPayload(ip, port, timeoutSec, body)
     }
 
     private class RawAggregator(

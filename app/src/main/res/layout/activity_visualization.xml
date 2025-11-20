@@ -7,19 +7,23 @@
     <com.google.android.material.appbar.MaterialToolbar
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
-        android:layout_height="?attr/actionBarSize"
+        android:layout_height="wrap_content"
         android:background="?attr/colorSurface"
+        android:minHeight="?attr/actionBarSize"
         app:titleTextAppearance="@style/TextAppearance.Material3.TitleLarge" />
 
     <ScrollView
+        android:id="@+id/contentScroll"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:layout_marginTop="?attr/actionBarSize"
+        android:clipToPadding="false"
         android:paddingStart="@dimen/layout_padding_horizontal"
         android:paddingEnd="@dimen/layout_padding_horizontal"
         android:paddingBottom="@dimen/layout_padding_vertical">
 
         <LinearLayout
+            android:id="@+id/contentContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
@@ -85,14 +89,21 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
-            <include
-                android:id="@+id/panel_primary"
-                layout="@layout/include_visual_panel" />
+            <LinearLayout
+                android:id="@+id/panelContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
 
-            <include
-                android:id="@+id/panel_secondary"
-                layout="@layout/include_visual_panel"
-                android:visibility="gone" />
+                <include
+                    android:id="@+id/panel_primary"
+                    layout="@layout/include_visual_panel" />
+
+                <include
+                    android:id="@+id/panel_secondary"
+                    layout="@layout/include_visual_panel"
+                    android:visibility="gone" />
+            </LinearLayout>
 
         </LinearLayout>
     </ScrollView>

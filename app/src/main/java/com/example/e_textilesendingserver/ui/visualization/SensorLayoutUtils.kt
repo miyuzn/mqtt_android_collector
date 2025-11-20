@@ -30,11 +30,13 @@ object SensorLayoutUtils {
         for (r in 1..limit) {
             if (sensorCount % r == 0) {
                 val c = sensorCount / r
-                pairs.add(r to c)
-                if (r != c) pairs.add(c to r)
+                if (r <= MAX_DIM && c <= MAX_DIM) {
+                    pairs.add(r to c)
+                    if (r != c) pairs.add(c to r)
+                }
             }
         }
-        if (pairs.isEmpty()) pairs.add(sensorCount to 1)
+        if (pairs.isEmpty()) pairs.add(minOf(sensorCount, MAX_DIM) to 1)
         return pairs.sortedWith(compareBy<Pair<Int, Int>> { abs(it.first - it.second) }.thenBy { it.first * it.second })
     }
 
@@ -144,4 +146,5 @@ object SensorLayoutUtils {
     )
 
     private const val COP_OFFSET = 250
+    private const val MAX_DIM = 13
 }
