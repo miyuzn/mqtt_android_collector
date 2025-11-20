@@ -4,7 +4,7 @@
     <string name="action_start_bridge">Start</string>
     <string name="action_start_local">Start Local</string>
     <string name="action_stop_bridge">Stop</string>
-    <string name="bridge_hint">After starting, the app runs the UDP->MQTT bridge as a foreground service. Make sure notification permission is granted and the device is connected to the target LAN.</string>
+    <string name="bridge_hint">After starting, the app runs the UDP→MQTT bridge as a foreground service. Make sure notification permission is granted and the device is connected to the target LAN.</string>
     <string name="local_mode_hint">Local mode parses UDP packets and saves CSV locally; MQTT publish is disabled.</string>
     <string name="broker_host_label">Broker Host / IP</string>
     <string name="broker_port_label">Broker Port</string>
@@ -19,6 +19,24 @@
     <string name="bridge_state_error">Error: %1$s</string>
     <string name="local_mode_switch_label">Local storage only (skip MQTT)</string>
     <string name="local_store_path">CSV path: %1$s</string>
+    <string name="action_open_visual">Open Visualization</string>
+
+    <string name="visual_title">Pressure Visualization</string>
+    <string name="visual_dual_mode">Dual device mode</string>
+    <string name="visual_range_title">Pressure range</string>
+    <string name="heatmap_empty_waiting">Waiting for data...</string>
+    <string name="controls_device">Device</string>
+    <string name="controls_layout">Layout</string>
+    <string name="controls_mirror_rows">Mirror rows</string>
+    <string name="controls_mirror_cols">Mirror cols</string>
+    <string name="overview_gyro">Gyroscope (°/s)</string>
+    <string name="overview_acc">Acceleration (m/s²)</string>
+    <string name="overview_cop">Center of pressure</string>
+    <string name="actions_reset">Reset</string>
+    <string name="inputs_lower_label">Lower bound</string>
+    <string name="inputs_upper_label">Upper bound</string>
+    <string name="visual_panel_a">Device A</string>
+    <string name="visual_panel_b">Device B</string>
 
     <string name="provision_title">BLE Provisioning</string>
     <string name="provision_scan_hint">Scan ESP devices in provisioning mode and connect to push Wi-Fi credentials.</string>

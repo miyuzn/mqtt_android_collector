@@ -11,6 +11,7 @@ import android.widget.EditText
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -24,6 +25,7 @@ import com.example.e_textilesendingserver.provisioning.ProvisioningConstants
 import com.example.e_textilesendingserver.service.BridgeService
 import com.example.e_textilesendingserver.service.BridgeState
 import com.example.e_textilesendingserver.service.BridgeStatusStore
+import com.example.e_textilesendingserver.ui.visualization.VisualizationActivity
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
@@ -79,14 +81,19 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
                 requestNotificationPermissionIfNeeded()
+                binding.localModeSwitch.isEnabled = false
             }
         }
         binding.stopButton.setOnClickListener {
             stopService(Intent(this, BridgeService::class.java))
+            binding.localModeSwitch.isEnabled = true
         }
         binding.localModeSwitch.setOnCheckedChangeListener { _, isChecked ->
             val currentRoot = configRepository.config.value.localStoreRoot
             updateModeUi(isChecked, currentRoot)
+        }
+        binding.viewVisualButton.setOnClickListener {
+            startActivity(Intent(this, VisualizationActivity::class.java))
         }
 
         lifecycleScope.launch {
@@ -162,6 +169,7 @@ class MainActivity : AppCompatActivity() {
             is BridgeState.Error -> getString(R.string.bridge_state_error, state.message)
         }
         updateStatus(message)
+        binding.localModeSwitch.isEnabled = state is BridgeState.Idle
     }
 
     private fun updateStatus(message: String) {
@@ -200,6 +208,9 @@ class MainActivity : AppCompatActivity() {
         binding.localModeSwitch.isChecked = localMode
         binding.brokerHostLayout.isEnabled = !localMode
         binding.brokerPortLayout.isEnabled = !localMode
+        binding.brokerHostLayout.isVisible = !localMode
+        binding.brokerPortLayout.isVisible = !localMode
+        // BLE 配网仍保留可用
         binding.startButton.text = if (localMode) {
             getString(R.string.action_start_local)
         } else {
@@ -210,7 +221,9 @@ class MainActivity : AppCompatActivity() {
         } else {
             getString(R.string.bridge_hint)
         }
+        binding.localStorePath.isVisible = localMode
         binding.localStorePath.text = getString(R.string.local_store_path, storeRoot)
+        binding.viewVisualButton.isVisible = localMode
     }
 
     private fun setTextIfNeeded(view: EditText, newValue: String) {

@@ -19,7 +19,24 @@
     <string name="bridge_state_error">错误: %1$s</string>
     <string name="local_mode_switch_label">本地存储（跳过 MQTT）</string>
     <string name="local_store_path">CSV 路径：%1$s</string>
+    <string name="action_open_visual">打开可视化</string>
 
+    <string name="visual_title">压力可视化</string>
+    <string name="visual_dual_mode">双设备模式</string>
+    <string name="visual_range_title">压力范围</string>
+    <string name="heatmap_empty_waiting">等待数据...</string>
+    <string name="controls_device">设备</string>
+    <string name="controls_layout">布局</string>
+    <string name="controls_mirror_rows">行镜像</string>
+    <string name="controls_mirror_cols">列镜像</string>
+    <string name="overview_gyro">陀螺仪 (°/s)</string>
+    <string name="overview_acc">加速度 (m/s²)</string>
+    <string name="overview_cop">压力中心</string>
+    <string name="actions_reset">重置</string>
+    <string name="inputs_lower_label">压力下限</string>
+    <string name="inputs_upper_label">压力上限</string>
+    <string name="visual_panel_a">设备 A</string>
+    <string name="visual_panel_b">设备 B</string>
     <string name="provision_title">BLE 配网</string>
     <string name="provision_scan_hint">扫描处于配网模式的 ESP 设备并连接后即可下发 Wi-Fi 凭据。</string>
     <string name="provision_scan_button">扫描设备</string>

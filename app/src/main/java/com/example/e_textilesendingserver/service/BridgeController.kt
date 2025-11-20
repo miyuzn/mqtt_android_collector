@@ -6,6 +6,7 @@ import com.example.e_textilesendingserver.core.config.BridgeConfigRepository
 import com.example.e_textilesendingserver.core.parser.SensorParser
 import com.example.e_textilesendingserver.core.parser.toJsonBytes
 import com.example.e_textilesendingserver.data.DeviceRegistry
+import com.example.e_textilesendingserver.data.FramePreviewStore
 import com.example.e_textilesendingserver.data.LocalStore
 import com.example.e_textilesendingserver.mqtt.MqttBridge
 import java.io.File
@@ -195,10 +196,10 @@ class BridgeController(
         val pollTimeout = max(config.batchMaxMs, PACKET_POLL_TIMEOUT_MS)
         val shouldPublishRaw = mqttEnabled && config.publishRaw
         val shouldPublishParsed = mqttEnabled && config.publishParsed
-        val shouldParse = shouldPublishParsed || localStore != null || !config.publishRaw
+        val shouldParse = shouldPublishParsed || localStore != null || !config.publishRaw || FramePreviewStore.isEnabled()
 
         try {
-            while (scope.isActive) {
+            while (coroutineContext.isActive) {
                 val packet = packetQueue.poll(pollTimeout)
                 if (packet == null) {
                     if (shouldPublishRaw) {
@@ -237,6 +238,7 @@ class BridgeController(
                             localStore.write(frame)
                             stats.onStored()
                         }
+                        FramePreviewStore.onFrame(frame)
                     } else {
                         stats.onParseError()
                     }
@@ -266,7 +268,7 @@ class BridgeController(
     }
 
     private suspend fun publishRegistryLoop(config: BridgeConfig, registry: DeviceRegistry) {
-        while (scope.isActive) {
+        while (coroutineContext.isActive) {
             val snapshot = registry.snapshot(config.configAgentId)
             val devicesArray = JSONArray().apply {
                 snapshot.devices.forEach {

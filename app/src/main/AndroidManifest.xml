@@ -40,6 +40,10 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.ETextileSendingServer">
         <activity
+            android:name=".ui.visualization.VisualizationActivity"
+            android:exported="false"
+            android:theme="@style/Theme.ETextileSendingServer" />
+        <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>

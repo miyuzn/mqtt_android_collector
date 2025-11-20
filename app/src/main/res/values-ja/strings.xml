@@ -19,7 +19,24 @@
     <string name="bridge_state_error">エラー: %1$s</string>
     <string name="local_mode_switch_label">ローカル保存のみ（MQTT 無効）</string>
     <string name="local_store_path">CSV 保存先: %1$s</string>
+    <string name="action_open_visual">可視化を開く</string>
 
+    <string name="visual_title">圧力可視化</string>
+    <string name="visual_dual_mode">デュアルデバイスモード</string>
+    <string name="visual_range_title">圧力範囲</string>
+    <string name="heatmap_empty_waiting">データ待ち...</string>
+    <string name="controls_device">デバイス</string>
+    <string name="controls_layout">レイアウト</string>
+    <string name="controls_mirror_rows">行ミラー</string>
+    <string name="controls_mirror_cols">列ミラー</string>
+    <string name="overview_gyro">ジャイロ (°/s)</string>
+    <string name="overview_acc">加速度 (m/s²)</string>
+    <string name="overview_cop">圧力中心</string>
+    <string name="actions_reset">リセット</string>
+    <string name="inputs_lower_label">下限</string>
+    <string name="inputs_upper_label">上限</string>
+    <string name="visual_panel_a">デバイス A</string>
+    <string name="visual_panel_b">デバイス B</string>
     <string name="provision_title">BLE プロビジョニング</string>
     <string name="provision_scan_hint">プロビジョニングモードの ESP デバイスをスキャンし、接続して Wi-Fi 情報を送信します。</string>
     <string name="provision_scan_button">デバイスをスキャン</string>
