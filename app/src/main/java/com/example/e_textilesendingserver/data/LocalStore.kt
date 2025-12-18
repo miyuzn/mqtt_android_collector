@@ -113,7 +113,7 @@ private class CsvHandle(
 
     fun writeRow(
         ts: Double,
-        pressures: IntArray,
+        pressures: FloatArray,
         mag: FloatArray,
         gyro: FloatArray,
         acc: FloatArray,
@@ -132,7 +132,7 @@ private class CsvHandle(
 
     private fun buildRow(
         ts: Double,
-        pressures: IntArray,
+        pressures: FloatArray,
         mag: FloatArray,
         gyro: FloatArray,
         acc: FloatArray,
@@ -140,8 +140,8 @@ private class CsvHandle(
         val builder = StringBuilder()
         builder.append(ts)
         repeat(sn) { idx ->
-            val value = if (idx in pressures.indices) pressures[idx] else 0
-            builder.append(',').append(value)
+            val value = if (idx in pressures.indices) pressures[idx] else 0f
+            builder.append(',').append(value.toStringSafe())
         }
         fun appendTriple(arr: FloatArray) {
             repeat(3) { i ->

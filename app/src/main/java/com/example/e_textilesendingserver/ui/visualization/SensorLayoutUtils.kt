@@ -44,7 +44,7 @@ object SensorLayoutUtils {
         computeLayoutOptions(sensorCount).firstOrNull() ?: (sensorCount to 1)
 
     fun mapPressuresToGrid(
-        pressures: IntArray,
+        pressures: FloatArray,
         rows: Int,
         cols: Int,
         mirrorRows: Boolean,
@@ -65,14 +65,14 @@ object SensorLayoutUtils {
     }
 
     fun computeCop(
-        pressures: IntArray,
+        pressures: FloatArray,
         rows: Int,
         cols: Int,
         mirrorRows: Boolean,
         mirrorCols: Boolean,
     ): CopResult {
         if (pressures.isEmpty()) return CopResult(false, 0f, 0f)
-        val adjusted = pressures.map { p -> (p - COP_OFFSET).coerceAtLeast(0) }.toIntArray()
+        val adjusted = pressures.map { p -> (p - COP_OFFSET).coerceAtLeast(0f) }.toFloatArray()
         val useDefaultCoords = adjusted.size == defaultX.size
         val cop = if (useDefaultCoords) {
             weightedCop(adjusted, defaultX, defaultY)
@@ -86,7 +86,7 @@ object SensorLayoutUtils {
     }
 
     private fun weightedCop(
-        pressures: IntArray,
+        pressures: FloatArray,
         xCoords: DoubleArray,
         yCoords: DoubleArray,
     ): CopResult {
@@ -113,7 +113,7 @@ object SensorLayoutUtils {
     }
 
     private fun gridCop(
-        pressures: IntArray,
+        pressures: FloatArray,
         rows: Int,
         cols: Int,
         mirrorRows: Boolean,
@@ -145,6 +145,6 @@ object SensorLayoutUtils {
         val normY: Float,
     )
 
-    private const val COP_OFFSET = 250
+    private const val COP_OFFSET = 250f
     private const val MAX_DIM = 13
 }

@@ -1,35 +1,59 @@
 package com.example.e_textilesendingserver.mqtt
 
+import android.content.Context
 import com.example.e_textilesendingserver.core.config.BridgeConfig
+import com.example.e_textilesendingserver.R
 import com.example.e_textilesendingserver.util.await
 import com.hivemq.client.mqtt.MqttClient
+import com.hivemq.client.mqtt.MqttClientSslConfig
 import com.hivemq.client.mqtt.mqtt3.Mqtt3AsyncClient
 import com.hivemq.client.mqtt.mqtt3.message.publish.Mqtt3Publish
 import java.nio.ByteBuffer
+import java.security.KeyStore
+import java.security.cert.CertificateException
+import java.security.cert.CertificateFactory
+import javax.net.ssl.SSLException
+import javax.net.ssl.TrustManagerFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class MqttBridge {
+class MqttBridge(
+    private val appContext: Context,
+) {
 
     private var client: Mqtt3AsyncClient? = null
 
     suspend fun connect(config: BridgeConfig) = withContext(Dispatchers.IO) {
         if (client != null) return@withContext
-        val mqttClient = MqttClient.builder()
-            .useMqttVersion3()
-            .identifier(config.clientId)
-            .serverHost(config.brokerHost)
-            .serverPort(config.brokerPort)
-            .automaticReconnectWithDefaultConfig()
-            .buildAsync()
-        mqttClient.connectWith()
-            .keepAlive(30)
-            .cleanSession(true)
-            .send()
-            .await()
-        client = mqttClient
+
+        val useTls = shouldUseTls(config)
+        val preferred = buildClient(config, sslMode = if (useTls) SslMode.PINNED_CA else SslMode.NONE)
+        try {
+            preferred.connectWith()
+                .keepAlive(30)
+                .cleanSession(true)
+                .send()
+                .await()
+            client = preferred
+        } catch (ex: Exception) {
+            if (!useTls || !shouldFallbackToSystemTrust(ex)) {
+                throw ex
+            }
+            val fallback = buildClient(config, sslMode = SslMode.SYSTEM_DEFAULT)
+            try {
+                fallback.connectWith()
+                    .keepAlive(30)
+                    .cleanSession(true)
+                    .send()
+                    .await()
+                client = fallback
+            } catch (fallbackEx: Exception) {
+                fallbackEx.addSuppressed(ex)
+                throw fallbackEx
+            }
+        }
     }
 
     suspend fun publish(
@@ -68,6 +92,66 @@ class MqttBridge {
     suspend fun disconnect() = withContext(Dispatchers.IO) {
         client?.disconnect()?.await()
         client = null
+    }
+
+    private fun shouldUseTls(config: BridgeConfig): Boolean = config.brokerPort == 8883
+
+    private enum class SslMode {
+        NONE,
+        PINNED_CA,
+        SYSTEM_DEFAULT,
+    }
+
+    private fun buildClient(config: BridgeConfig, sslMode: SslMode): Mqtt3AsyncClient {
+        val builder = MqttClient.builder()
+            .useMqttVersion3()
+            .identifier(config.clientId)
+            .serverHost(config.brokerHost)
+            .serverPort(config.brokerPort)
+
+        when (sslMode) {
+            SslMode.NONE -> Unit
+            SslMode.SYSTEM_DEFAULT -> builder.sslWithDefaultConfig()
+            SslMode.PINNED_CA -> {
+                val pinned = runCatching { buildPinnedSslConfig() }.getOrNull()
+                if (pinned != null) {
+                    builder.sslConfig(pinned)
+                } else {
+                    builder.sslWithDefaultConfig()
+                }
+            }
+        }
+
+        return builder
+            .automaticReconnectWithDefaultConfig()
+            .buildAsync()
+    }
+
+    private fun buildPinnedSslConfig(): MqttClientSslConfig {
+        val caCert = appContext.resources.openRawResource(R.raw.mqtt_ca).use { input ->
+            CertificateFactory.getInstance("X.509").generateCertificate(input)
+        }
+        val store = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
+            load(null, null)
+            setCertificateEntry("mqtt_ca", caCert)
+        }
+        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply {
+            init(store)
+        }
+        return MqttClientSslConfig.builder()
+            .trustManagerFactory(tmf)
+            .build()
+    }
+
+    private fun shouldFallbackToSystemTrust(ex: Throwable): Boolean {
+        var current: Throwable? = ex
+        while (current != null) {
+            if (current is SSLException || current is CertificateException) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
     }
 
     private fun Int.toMqttQos(): com.hivemq.client.mqtt.datatypes.MqttQos = when (this) {

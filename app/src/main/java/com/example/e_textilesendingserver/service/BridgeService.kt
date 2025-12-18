@@ -17,7 +17,7 @@ class BridgeService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         val repository = BridgeConfigRepository(applicationContext)
-        controller = BridgeController(repository)
+        controller = BridgeController(applicationContext, repository)
         notificationHelper = BridgeNotificationHelper(this)
         notificationHelper.ensureChannel()
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

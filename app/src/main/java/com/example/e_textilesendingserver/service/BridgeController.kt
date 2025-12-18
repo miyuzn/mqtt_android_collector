@@ -1,5 +1,6 @@
 package com.example.e_textilesendingserver.service
 
+import android.content.Context
 import android.util.Log
 import com.example.e_textilesendingserver.core.config.BridgeConfig
 import com.example.e_textilesendingserver.core.config.BridgeConfigRepository
@@ -42,12 +43,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class BridgeController(
+    private val appContext: Context,
     private val configRepository: BridgeConfigRepository,
     private val parser: SensorParser = SensorParser(),
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val mqttBridge = MqttBridge()
+    private val mqttBridge = MqttBridge(appContext)
     private var runningJob: Job? = null
 
     fun start() {

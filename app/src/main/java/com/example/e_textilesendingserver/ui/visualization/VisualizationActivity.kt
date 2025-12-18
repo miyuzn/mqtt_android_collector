@@ -10,6 +10,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
+import androidx.core.view.updateLayoutParams
 import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
 import com.example.e_textilesendingserver.R
@@ -98,6 +99,7 @@ class VisualizationActivity : AppCompatActivity() {
     private fun applyWindowInsets() {
         val toolbarInitialTop = binding.toolbar.paddingTop
         val contentInitialBottom = binding.contentScroll.paddingBottom
+        val contentInitialTopMargin = (binding.contentScroll.layoutParams as ViewGroup.MarginLayoutParams).topMargin
         ViewCompat.setOnApplyWindowInsetsListener(binding.toolbar) { view, windowInsets ->
             val insets = windowInsets.getInsets(WindowInsetsCompat.Type.statusBars())
             view.updatePadding(top = toolbarInitialTop + insets.top)
@@ -106,6 +108,9 @@ class VisualizationActivity : AppCompatActivity() {
         ViewCompat.setOnApplyWindowInsetsListener(binding.contentScroll) { view, windowInsets ->
             val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.updatePadding(bottom = contentInitialBottom + insets.bottom)
+            view.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                topMargin = contentInitialTopMargin + insets.top
+            }
             windowInsets
         }
     }

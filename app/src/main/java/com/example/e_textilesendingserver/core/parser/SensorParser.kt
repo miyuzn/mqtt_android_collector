@@ -7,7 +7,7 @@ data class SensorFrame(
     val timestampSeconds: Double,
     val dn: String,
     val sn: Int,
-    val pressure: IntArray,
+    val pressure: FloatArray,
     val magnetometer: FloatArray,
     val gyroscope: FloatArray,
     val accelerometer: FloatArray,
@@ -46,11 +46,11 @@ class SensorParser {
         val expectedSize = pressureEnd + imuBytes + 2
         if (packet.size < expectedSize) return null
 
-        val pressure = IntArray(sn)
+        val pressure = FloatArray(sn)
         val buffer = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN)
         var offset = pressureStart
         repeat(sn) { idx ->
-            pressure[idx] = buffer.getInt(offset)
+            pressure[idx] = buffer.getFloat(offset)
             offset += 4
         }
 
