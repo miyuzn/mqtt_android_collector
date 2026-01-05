@@ -80,4 +80,10 @@
     <string name="provision_error_generic">Provisioning failed, please retry.</string>
     <string name="action_configure_device">BLE Provision</string>
     <string name="provision_result_success">Provisioned successfully: %1$s</string>
+
+    <string name="label_ca_cert">CA Certificate</string>
+    <string name="action_select_cert">Select</string>
+    <string name="action_clear_cert">Reset</string>
+    <string name="cert_using_default">Using default embedded certificate</string>
+    <string name="cert_using_custom">Custom: %1$s</string>
 </resources>

@@ -58,6 +58,17 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    private val certLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val path = copyUriToInternalFile(uri)
+                if (path != null) {
+                    configRepository.update { it.copy(customCaCertPath = path) }
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -90,10 +101,19 @@ class MainActivity : AppCompatActivity() {
         }
         binding.localModeSwitch.setOnCheckedChangeListener { _, isChecked ->
             val currentRoot = configRepository.config.value.localStoreRoot
-            updateModeUi(isChecked, currentRoot)
+            val currentCert = configRepository.config.value.customCaCertPath
+            updateModeUi(isChecked, currentRoot, currentCert)
         }
         binding.viewVisualButton.setOnClickListener {
             startActivity(Intent(this, VisualizationActivity::class.java))
+        }
+        binding.selectCertButton.setOnClickListener {
+            certLauncher.launch(arrayOf("application/x-x509-ca-cert", "application/pkix-cert", "application/pem-certificate-chain", "*/*"))
+        }
+        binding.clearCertButton.setOnClickListener {
+            lifecycleScope.launch {
+                configRepository.update { it.copy(customCaCertPath = null) }
+            }
         }
 
         lifecycleScope.launch {
@@ -107,7 +127,7 @@ class MainActivity : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 configRepository.config.collect { config ->
                     updateBrokerInputs(config.brokerHost, config.brokerPort)
-                    updateModeUi(config.localMode, config.localStoreRoot)
+                    updateModeUi(config.localMode, config.localStoreRoot, config.customCaCertPath)
                 }
             }
         }
@@ -204,12 +224,23 @@ class MainActivity : AppCompatActivity() {
         setTextIfNeeded(binding.brokerPortInput, port.toString())
     }
 
-    private fun updateModeUi(localMode: Boolean, storeRoot: String) {
+    private fun updateModeUi(localMode: Boolean, storeRoot: String, certPath: String?) {
         binding.localModeSwitch.isChecked = localMode
         binding.brokerHostLayout.isEnabled = !localMode
         binding.brokerPortLayout.isEnabled = !localMode
         binding.brokerHostLayout.isVisible = !localMode
         binding.brokerPortLayout.isVisible = !localMode
+        binding.certLayout.isVisible = !localMode
+        
+        if (certPath != null) {
+            val file = java.io.File(certPath)
+            binding.certPathText.text = getString(R.string.cert_using_custom, file.name)
+            binding.clearCertButton.isVisible = true
+        } else {
+            binding.certPathText.text = getString(R.string.cert_using_default)
+            binding.clearCertButton.isVisible = false
+        }
+
         // BLE 配网仍保留可用
         binding.startButton.text = if (localMode) {
             getString(R.string.action_start_local)
@@ -230,6 +261,24 @@ class MainActivity : AppCompatActivity() {
         if (view.text?.toString() != newValue) {
             view.setText(newValue)
             view.setSelection(newValue.length)
+        }
+    }
+
+    private fun copyUriToInternalFile(uri: android.net.Uri): String? {
+        return try {
+            val contentResolver = applicationContext.contentResolver
+            val inputStream = contentResolver.openInputStream(uri) ?: return null
+            val certDir = java.io.File(filesDir, "certs")
+            if (!certDir.exists()) certDir.mkdirs()
+            val fileName = "custom_ca_${System.currentTimeMillis()}.crt"
+            val file = java.io.File(certDir, fileName)
+            java.io.FileOutputStream(file).use { output ->
+                inputStream.copyTo(output)
+            }
+            file.absolutePath
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
         }
     }
 

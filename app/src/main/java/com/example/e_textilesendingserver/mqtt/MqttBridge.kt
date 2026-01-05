@@ -113,7 +113,7 @@ class MqttBridge(
             SslMode.NONE -> Unit
             SslMode.SYSTEM_DEFAULT -> builder.sslWithDefaultConfig()
             SslMode.PINNED_CA -> {
-                val pinned = runCatching { buildPinnedSslConfig() }.getOrNull()
+                val pinned = runCatching { buildPinnedSslConfig(config.customCaCertPath) }.getOrNull()
                 if (pinned != null) {
                     builder.sslConfig(pinned)
                 } else {
@@ -127,9 +127,15 @@ class MqttBridge(
             .buildAsync()
     }
 
-    private fun buildPinnedSslConfig(): MqttClientSslConfig {
-        val caCert = appContext.resources.openRawResource(R.raw.mqtt_ca).use { input ->
-            CertificateFactory.getInstance("X.509").generateCertificate(input)
+    private fun buildPinnedSslConfig(certPath: String?): MqttClientSslConfig {
+        val caCert = if (certPath != null) {
+            java.io.FileInputStream(certPath).use { input ->
+                CertificateFactory.getInstance("X.509").generateCertificate(input)
+            }
+        } else {
+            appContext.resources.openRawResource(R.raw.mqtt_ca).use { input ->
+                CertificateFactory.getInstance("X.509").generateCertificate(input)
+            }
         }
         val store = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
             load(null, null)
