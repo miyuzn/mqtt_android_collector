@@ -15,6 +15,7 @@
     <string name="bridge_state_starting">Starting...</string>
     <string name="bridge_state_starting_local">Starting (local storage)...</string>
     <string name="bridge_state_running_template">UDP:%1$d MQTT:%2$d RAW:%3$d Devices:%4$d</string>
+    <string name="bridge_state_running_warning">⚠ %1$s\nUDP:%2$d MQTT:%3$d Devices:%4$d</string>
     <string name="bridge_state_running_local_template">UDP:%1$d Stored:%2$d Devices:%3$d</string>
     <string name="bridge_state_error">Error: %1$s</string>
     <string name="local_mode_switch_label">Local storage only (skip MQTT)</string>
@@ -80,10 +81,4 @@
     <string name="provision_error_generic">Provisioning failed, please retry.</string>
     <string name="action_configure_device">BLE Provision</string>
     <string name="provision_result_success">Provisioned successfully: %1$s</string>
-
-    <string name="label_ca_cert">CA Certificate</string>
-    <string name="action_select_cert">Select</string>
-    <string name="action_clear_cert">Reset</string>
-    <string name="cert_using_default">Using default embedded certificate</string>
-    <string name="cert_using_custom">Custom: %1$s</string>
 </resources>

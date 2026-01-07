@@ -47,7 +47,6 @@ class BridgeConfigRepository(context: Context) {
             .ifBlank { defaultLocalRoot }
         val localFlush = prefs.getInt(KEY_LOCAL_FLUSH_EVERY_ROWS, base.localFlushEveryRows)
         val localInact = prefs.getInt(KEY_LOCAL_INACT_TIMEOUT, base.localInactTimeoutSec)
-        val certPath = prefs.getString(KEY_CUSTOM_CA_CERT_PATH, null)
         return base.copy(
             brokerHost = host ?: base.brokerHost,
             brokerPort = if (port > 0) port else base.brokerPort,
@@ -55,7 +54,6 @@ class BridgeConfigRepository(context: Context) {
             localStoreRoot = localRoot,
             localFlushEveryRows = localFlush,
             localInactTimeoutSec = localInact,
-            customCaCertPath = certPath,
         )
     }
 
@@ -67,7 +65,6 @@ class BridgeConfigRepository(context: Context) {
             .putString(KEY_LOCAL_ROOT, config.localStoreRoot)
             .putInt(KEY_LOCAL_FLUSH_EVERY_ROWS, config.localFlushEveryRows)
             .putInt(KEY_LOCAL_INACT_TIMEOUT, config.localInactTimeoutSec)
-            .putString(KEY_CUSTOM_CA_CERT_PATH, config.customCaCertPath)
             .commit()
     }
 
@@ -85,6 +82,5 @@ class BridgeConfigRepository(context: Context) {
         private const val KEY_LOCAL_ROOT = "local_root"
         private const val KEY_LOCAL_FLUSH_EVERY_ROWS = "local_flush"
         private const val KEY_LOCAL_INACT_TIMEOUT = "local_inact_timeout"
-        private const val KEY_CUSTOM_CA_CERT_PATH = "custom_ca_cert_path"
     }
 }

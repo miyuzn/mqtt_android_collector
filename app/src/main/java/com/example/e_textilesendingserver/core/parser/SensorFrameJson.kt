@@ -13,5 +13,6 @@ fun SensorFrame.toJsonBytes(): ByteArray {
         put("gyro", JSONArray(gyroscope.map { it.toDouble() }))
         put("acc", JSONArray(accelerometer.map { it.toDouble() }))
     }
-    return obj.toString().toByteArray()
+    // Match Python: always publish as a JSON array (batch)
+    return JSONArray().put(obj).toString().toByteArray()
 }

@@ -42,6 +42,8 @@ import kotlin.text.Charsets
 import org.json.JSONArray
 import org.json.JSONObject
 
+import kotlinx.coroutines.channels.Channel
+
 class BridgeController(
     private val appContext: Context,
     private val configRepository: BridgeConfigRepository,
@@ -51,6 +53,7 @@ class BridgeController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mqttBridge = MqttBridge(appContext)
     private var runningJob: Job? = null
+    private val commandQueue = Channel<JSONObject>(Channel.UNLIMITED)
 
     fun start() {
         if (runningJob != null) return
@@ -109,7 +112,8 @@ class BridgeController(
             kotlinx.coroutines.coroutineScope {
                 if (mqttEnabled) {
                     launch { publishRegistryLoop(config, registry) }
-                    launch { subscribeCommands(config, registry) }
+                    launch { subscribeCommands(config) }
+                    launch { commandWorker(config, registry) }
                 }
                 launch { udpLoop(config, packetQueue, stats, subscriptionManager) }
                 launch { mqttWorker(config, registry, stats, rawAggregator, packetQueue, localStore, mqttEnabled) }
@@ -127,6 +131,9 @@ class BridgeController(
             }
         }
     }
+
+
+
 
     private suspend fun udpLoop(
         config: BridgeConfig,
@@ -216,46 +223,59 @@ class BridgeController(
 
                 stats.onPacketIn()
                 val payload = packet.payload
-                if (shouldPublishRaw) {
-                    rawAggregator.enqueue(payload) { body, count ->
-                        mqttBridge.publish(config.topicRaw, body, config.mqttQos)
-                        stats.onRawPublished(count)
+                try {
+                    if (shouldPublishRaw) {
+                        rawAggregator.enqueue(payload) { body, count ->
+                            mqttBridge.publish(config.topicRaw, body, config.mqttQos)
+                            stats.onRawPublished(count)
+                        }
                     }
-                }
 
-                val host = packet.address.hostAddress
-                if (shouldParse) {
-                    val frame = parser.parse(payload)
-                    if (frame != null) {
-                        if (!host.isNullOrBlank()) {
-                            registry.record(frame.dn, host)
+                    val host = packet.address.hostAddress
+                    
+                    // Robustness: Attempt to record device from raw metadata first (like Python quick_dn_from_payload)
+                    if (!host.isNullOrBlank()) {
+                        val metadata = parser.peekMetadata(payload)
+                        if (metadata != null) {
+                            registry.record(metadata.dn, host)
                         }
-                        if (shouldPublishParsed) {
-                            val topic = "${config.topicParsedPrefix.trimEnd('/')}/${frame.dn}"
-                            val jsonBytes = frame.toJsonBytes()
-                            mqttBridge.publish(topic, jsonBytes, config.mqttQos)
-                            stats.onParsedPublished()
-                        }
-                        if (localStore != null) {
-                            localStore.write(frame)
-                            stats.onStored()
-                        }
-                        FramePreviewStore.onFrame(frame)
-                    } else {
-                        stats.onParseError()
                     }
-                } else {
-                    val metadata = parser.peekMetadata(payload)
-                    if (metadata != null && !host.isNullOrBlank()) {
-                        registry.record(metadata.dn, host)
-                    }
-                }
 
-                if (shouldPublishRaw) {
-                    rawAggregator.flushIfTimedOut { body, count ->
-                        mqttBridge.publish(config.topicRaw, body, config.mqttQos)
-                        stats.onRawPublished(count)
+                    if (shouldParse) {
+                        val frame = parser.parse(payload)
+                        if (frame != null) {
+                            if (!host.isNullOrBlank()) {
+                                registry.record(frame.dn, host)
+                            }
+                            if (shouldPublishParsed) {
+                                val topic = "${config.topicParsedPrefix.trimEnd('/')}/${frame.dn}"
+                                val jsonBytes = frame.toJsonBytes()
+                                mqttBridge.publish(topic, jsonBytes, config.mqttQos)
+                                stats.onParsedPublished()
+                            }
+                            if (localStore != null) {
+                                localStore.write(frame)
+                                stats.onStored()
+                            }
+                            FramePreviewStore.onFrame(frame)
+                        } else {
+                            stats.onParseError()
+                        }
                     }
+
+                    if (shouldPublishRaw) {
+                        rawAggregator.flushIfTimedOut { body, count ->
+                            mqttBridge.publish(config.topicRaw, body, config.mqttQos)
+                            stats.onRawPublished(count)
+                        }
+                    }
+                    stats.clearConnectionError()
+                } catch (ex: Exception) {
+                    val msg = ex.message ?: "MQTT Publish Error"
+                    Log.w(TAG, "Publish failed: $msg")
+                    stats.setConnectionError(msg)
+                    // Optional: delay to avoid tight loop spin if error persists
+                    delay(1000)
                 }
                 stats.maybeEmit()
             }
@@ -295,10 +315,7 @@ class BridgeController(
         }
     }
 
-    private suspend fun subscribeCommands(
-        config: BridgeConfig,
-        registry: DeviceRegistry,
-    ) {
+    private suspend fun subscribeCommands(config: BridgeConfig) {
         mqttBridge.subscribe(config.configCmdTopic, scope) { publish ->
             val payloadBytes = publish.payloadAsBytes
             val payload = runCatching {
@@ -312,11 +329,18 @@ class BridgeController(
                 )
                 return@subscribe
             }
-            scope.launch {
-                handleCommand(payload, config, registry)
-            }
+            commandQueue.trySend(payload)
         }
         awaitCancellation()
+    }
+
+    private suspend fun commandWorker(
+        config: BridgeConfig,
+        registry: DeviceRegistry,
+    ) = withContext(Dispatchers.IO) {
+        for (payload in commandQueue) {
+            handleCommand(payload, config, registry)
+        }
     }
 
     private suspend fun handleCommand(
@@ -326,31 +350,94 @@ class BridgeController(
     ) = withContext(Dispatchers.IO) {
         val commandId = payload.optString("command_id", "cmd-${System.currentTimeMillis()}")
         val dn = payload.optString("target_dn", payload.optString("dn"))
+        
+        val payloadSection = payload.optJSONObject("payload") ?: JSONObject()
+        val type = payload.optString("type", payloadSection.optString("type")).lowercase()
+        val requestedBy = payload.optString("requested_by").ifBlank { payloadSection.optString("requested_by") }
+        
+        if (type in setOf("discover", "discover_only", "discover_devices")) {
+            val attempts = payloadSection.optInt("attempts", payload.optInt("attempts", 2))
+            val gap = payloadSection.optDouble("gap", payload.optDouble("gap", 0.15))
+            val timeout = payloadSection.optDouble("timeout", payload.optDouble("timeout", 5.0))
+            
+            val discoveries = discoverDevices(
+                attempts = max(1, attempts),
+                gapSec = max(0.0, gap),
+                timeoutSec = max(0.1, timeout),
+                broadcastAddrs = null // defaults to 255.255.255.255
+            )
+            
+            discoveries.forEach { item ->
+                val itemDn = normalizeDn(
+                    item.optString("dn").takeIf { it.isNotEmpty() }
+                        ?: item.optString("mac").takeIf { it.isNotEmpty() }
+                        ?: item.optString("device_code").takeIf { it.isNotEmpty() }
+                        ?: item.optString("ip")
+                )
+                val itemIp = item.optString("ip").takeIf { it.isNotEmpty() } ?: item.optString("from")
+                if (itemDn.isNotEmpty() && !itemIp.isNullOrBlank()) {
+                    registry.record(itemDn, itemIp)
+                }
+            }
+            
+            publishCommandResult(
+                config = config,
+                commandId = commandId,
+                status = "ok",
+                dn = "BROADCAST",
+                ip = null,
+                reqPayload = JSONObject().apply {
+                    put("type", "discover")
+                    put("attempts", attempts)
+                    put("gap", gap)
+                    put("timeout", timeout)
+                },
+                extra = JSONObject().apply {
+                    put("count", discoveries.size)
+                    put("items", JSONArray(discoveries))
+                },
+                requestedBy = requestedBy
+            )
+            return@withContext
+        }
+
         if (dn.isBlank()) {
             publishCommandResult(
                 config,
                 commandId,
                 status = "error",
                 error = "target_dn required",
+                requestedBy = requestedBy
             )
             return@withContext
         }
-        val payloadSection = payload.optJSONObject("payload") ?: JSONObject()
-        val type = payload.optString("type", payloadSection.optString("type")).lowercase()
-        val analog = payload.opt("analog") ?: payloadSection.opt("analog")
-        val select = payload.opt("select") ?: payloadSection.opt("select")
-        val model = payload.opt("model") ?: payloadSection.opt("model")
-        val targetIp = payload.optString("ip")
+
+        var targetIp = payload.optString("ip")
             .ifBlank { payload.optString("target_ip") }
             .ifBlank { payloadSection.optString("ip") }
             .ifBlank { registry.resolve(dn) ?: "" }
+            
+        var discoveries: List<JSONObject> = emptyList()
+        var broadcastTargets: List<String> = emptyList()
+
+        if (targetIp.isBlank()) {
+            val res = resolveIpWithDiscovery(dn)
+            targetIp = res.first ?: ""
+            // discoveries and broadcastTargets are used for IP resolution but not returned in result
+            
+            if (targetIp.isNotBlank()) {
+                registry.record(dn, targetIp)
+            }
+        }
+        
         if (targetIp.isBlank()) {
             publishCommandResult(
                 config,
                 commandId,
                 status = "error",
                 dn = dn,
-                error = "DN 未关联任何 IP",
+                error = "Target DN currently is not associated with any IP (discovery failed)",
+                requestedBy = requestedBy
             )
             return@withContext
         }
@@ -370,10 +457,14 @@ class BridgeController(
                             dn = dn,
                             ip = targetIp,
                             error = "license token required",
+                            requestedBy = requestedBy
                         )
                         return@withContext
                     }
-                    val body = JSONObject().apply { put("license", token) }
+                    val body = JSONObject().apply { 
+                        put("license", token)
+                        put("type", "license")
+                    }
                     val reply = sendTcpJson(targetIp, port, config.deviceTcpTimeoutSec, body)
                     publishCommandResult(
                         config = config,
@@ -381,11 +472,16 @@ class BridgeController(
                         dn = dn,
                         status = "ok",
                         ip = targetIp,
+                        reqPayload = body,
                         extra = reply,
+                        requestedBy = requestedBy
                     )
                 }
                 "license_query", "license_query_only" -> {
-                    val body = JSONObject().apply { put("license", "?") }
+                    val body = JSONObject().apply { 
+                        put("license", "?")
+                        put("type", "license_query")
+                    }
                     val reply = sendTcpJson(targetIp, port, config.deviceTcpTimeoutSec, body)
                     publishCommandResult(
                         config = config,
@@ -393,15 +489,54 @@ class BridgeController(
                         dn = dn,
                         status = "ok",
                         ip = targetIp,
+                        reqPayload = body,
                         extra = reply,
+                        requestedBy = requestedBy
                     )
                 }
                 else -> {
-                    val payloadString = JSONObject().apply {
-                        put("analog", analog)
-                        put("select", select)
-                        put("model", model)
-                    }.toString() + "\n"
+                    val analog = payload.opt("analog") ?: payloadSection.opt("analog")
+                    val select = payload.opt("select") ?: payloadSection.opt("select")
+                    val model = payload.opt("model") ?: payloadSection.opt("model")
+
+                    // Check for raw/control path to match Python logic
+                    val controlKeys = setOf("standby", "filter", "calibration", "spiffs", "log")
+                    val isControl = type in setOf("raw", "custom", "control") ||
+                            payloadSection.keys().asSequence().any { it in controlKeys }
+
+                    // Intercept "Log Download" command and convert to the new ordered log command
+                    var effectivePayload = payloadSection
+                    if (type == "log" || payloadSection.has("log")) {
+                        effectivePayload = JSONObject().apply {
+                            put("log", JSONObject().apply {
+                                put("command", "read")
+                            })
+                        }
+                    }
+
+                    if (!isControl && analog == null && select == null && model == null) {
+                         publishCommandResult(
+                            config,
+                            commandId,
+                            dn = dn,
+                            ip = targetIp,
+                            status = "error",
+                            error = "Unknown command type '$type' and no config pins provided",
+                            requestedBy = requestedBy
+                        )
+                        return@withContext
+                    }
+
+                    val finalPayload = if (isControl) {
+                        effectivePayload
+                    } else {
+                        JSONObject().apply {
+                            put("analog", analog)
+                            put("select", select)
+                            put("model", model)
+                        }
+                    }
+                    val payloadString = finalPayload.toString() + "\n"
 
                     val reply = sendConfigPayload(targetIp, port, config.deviceTcpTimeoutSec, payloadString)
                     publishCommandResult(
@@ -410,7 +545,9 @@ class BridgeController(
                         dn = dn,
                         status = "ok",
                         ip = targetIp,
+                        reqPayload = finalPayload,
                         extra = reply,
+                        requestedBy = requestedBy
                     )
                 }
             }
@@ -422,8 +559,114 @@ class BridgeController(
                 ip = targetIp,
                 status = "error",
                 error = "internal-error: ${ex.message}",
+                requestedBy = requestedBy
             )
         }
+    }
+
+    private suspend fun resolveIpWithDiscovery(dn: String): Triple<String?, List<JSONObject>, List<String>> {
+        val targets = listOf("255.255.255.255")
+        val discoveries = discoverDevices(
+            attempts = 2,
+            gapSec = 0.15,
+            timeoutSec = 5.0,
+            broadcastAddrs = targets
+        )
+        val dnKey = normalizeDn(dn)
+        var chosenIp: String? = null
+        
+        if (dnKey.isNotEmpty()) {
+            for (item in discoveries) {
+                 val itemDn = normalizeDn(
+                    item.optString("dn").takeIf { it.isNotEmpty() }
+                        ?: item.optString("mac").takeIf { it.isNotEmpty() }
+                        ?: item.optString("device_code").takeIf { it.isNotEmpty() }
+                        ?: item.optString("ip")
+                )
+                if (itemDn == dnKey) {
+                    chosenIp = item.optString("ip").takeIf { it.isNotEmpty() } ?: item.optString("from")
+                    break
+                }
+            }
+        }
+        
+        if (chosenIp == null && discoveries.size == 1) {
+            val item = discoveries[0]
+            chosenIp = item.optString("ip").takeIf { it.isNotEmpty() } ?: item.optString("from")
+        }
+        
+        return Triple(chosenIp, discoveries, targets)
+    }
+
+    private suspend fun discoverDevices(
+        attempts: Int,
+        gapSec: Double,
+        timeoutSec: Double,
+        broadcastAddrs: List<String>?,
+    ): List<JSONObject> = withContext(Dispatchers.IO) {
+        val results = mutableListOf<JSONObject>()
+        val seen = mutableSetOf<String>()
+        val socket = DatagramSocket(null)
+        runCatching { socket.broadcast = true }
+        socket.bind(InetSocketAddress(0))
+        socket.soTimeout = (timeoutSec * 1000).toInt()
+
+        try {
+            val targets = broadcastAddrs ?: listOf("255.255.255.255")
+            val magic = "GCU_DISCOVER".toByteArray(Charsets.US_ASCII)
+            val packet = DatagramPacket(magic, magic.size)
+
+            repeat(max(1, attempts)) {
+                 targets.forEach { target ->
+                     try {
+                         packet.address = InetAddress.getByName(target)
+                         packet.port = 22346
+                         socket.send(packet)
+                     } catch (e: Exception) {
+                         // ignore
+                     }
+                 }
+                 if (gapSec > 0) {
+                     delay((gapSec * 1000).toLong())
+                 }
+            }
+
+            val buf = ByteArray(1024)
+            val rx = DatagramPacket(buf, buf.size)
+            val deadline = System.currentTimeMillis() + (timeoutSec * 1000).toLong()
+
+            while (System.currentTimeMillis() < deadline) {
+                try {
+                    val remaining = deadline - System.currentTimeMillis()
+                    if (remaining <= 0) break
+                    socket.soTimeout = remaining.toInt()
+                    socket.receive(rx)
+                    
+                    val text = String(rx.data, 0, rx.length, Charsets.UTF_8)
+                    // Some devices might send weird bytes, be resilient
+                    val obj = try { JSONObject(text) } catch (e: Exception) { continue }
+                    
+                    val ip = rx.address.hostAddress
+                    obj.put("from", ip)
+                    
+                    val sig = "${obj.optString("ip")}|${obj.optString("mac")}|${obj.optString("model")}|${obj.optString("port")}"
+                    if (seen.add(sig)) {
+                        results.add(obj)
+                    }
+                } catch (e: SocketTimeoutException) {
+                    break
+                } catch (e: Exception) {
+                    continue
+                }
+            }
+        } finally {
+            runCatching { socket.close() }
+        }
+        return@withContext results
+    }
+
+    private fun normalizeDn(value: String?): String {
+        return value?.replace(":", "")?.replace("-", "")?.replace(" ", "")?.trim()?.uppercase() ?: ""
     }
 
     private fun publishCommandResult(
@@ -433,7 +676,9 @@ class BridgeController(
         dn: String? = null,
         ip: String? = null,
         error: String? = null,
+        reqPayload: JSONObject? = null,
         extra: JSONObject? = null,
+        requestedBy: String? = null,
     ) {
         val topic = "${config.configResultTopic.trimEnd('/')}/${config.configAgentId}/$commandId"
         val body = JSONObject().apply {
@@ -444,7 +689,9 @@ class BridgeController(
             put("dn", dn)
             put("ip", ip)
             error?.let { put("error", it) }
+            reqPayload?.let { put("payload", it) }
             extra?.let { put("reply", it) }
+            requestedBy?.takeIf { it.isNotEmpty() }?.let { put("requested_by", it) }
         }.toString().toByteArray()
         scope.launch {
             mqttBridge.publish(topic, body, config.mqttQos)
@@ -474,7 +721,15 @@ class BridgeController(
             out.write(payload.toByteArray())
             out.flush()
             val reply = socket.getInputStream().bufferedReader().use { reader ->
-                reader.readLine().orEmpty()
+                val sb = StringBuilder()
+                var charCode = reader.read()
+                while (charCode != -1) {
+                    val c = charCode.toChar()
+                    sb.append(c)
+                    if (c == '\n') break
+                    charCode = reader.read()
+                }
+                sb.toString().trim()
             }
             if (reply.isBlank()) {
                 JSONObject().apply { put("status", "no-reply") }
@@ -578,6 +833,7 @@ class BridgeController(
         private var stored = 0L
         private var dropped = 0L
         private var parseErrors = 0L
+        private var connectionError: String? = null
 
         fun onPacketIn() {
             packetsIn++
@@ -603,6 +859,22 @@ class BridgeController(
             parseErrors++
         }
 
+        fun setConnectionError(error: String) {
+            if (connectionError != error) {
+                connectionError = error
+                // Force emit on error change
+                lastUpdate = 0 
+            }
+        }
+
+        fun clearConnectionError() {
+            if (connectionError != null) {
+                connectionError = null
+                // Force emit on error clear
+                lastUpdate = 0
+            }
+        }
+
         suspend fun maybeEmit() {
             val now = System.currentTimeMillis()
             if (now - lastUpdate < config.statsIntervalMs) return
@@ -621,6 +893,7 @@ class BridgeController(
                         lastUpdateMillis = now,
                     ),
                     localMode = config.localMode,
+                    connectionError = connectionError,
                 )
             )
         }
@@ -630,7 +903,7 @@ class BridgeController(
         private const val TAG = "BridgeController"
         private const val SOCKET_POLL_TIMEOUT_MS = 500
         private const val PACKET_POLL_TIMEOUT_MS = 100L
-        private val ISO_FORMATTER: DateTimeFormatter =
+        private val ISO_FORMATTER: DateTimeFormatter = 
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX").withZone(ZoneOffset.UTC)
 
         private fun formatIso(millis: Long): String =

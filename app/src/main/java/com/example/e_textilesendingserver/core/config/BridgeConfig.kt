@@ -43,5 +43,4 @@ data class BridgeConfig(
     val gcuHeartbeatIntervalSec: Long = 5,
     val gcuFailoverSec: Long = 20,
     val gcuBroadcastOnStop: Boolean = true,
-    val customCaCertPath: String? = null,
 )

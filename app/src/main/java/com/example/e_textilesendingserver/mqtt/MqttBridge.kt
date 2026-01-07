@@ -113,7 +113,7 @@ class MqttBridge(
             SslMode.NONE -> Unit
             SslMode.SYSTEM_DEFAULT -> builder.sslWithDefaultConfig()
             SslMode.PINNED_CA -> {
-                val pinned = runCatching { buildPinnedSslConfig(config.customCaCertPath) }.getOrNull()
+                val pinned = runCatching { buildPinnedSslConfig() }.getOrNull()
                 if (pinned != null) {
                     builder.sslConfig(pinned)
                 } else {
@@ -127,25 +127,30 @@ class MqttBridge(
             .buildAsync()
     }
 
-    private fun buildPinnedSslConfig(certPath: String?): MqttClientSslConfig {
-        val caCert = if (certPath != null) {
-            java.io.FileInputStream(certPath).use { input ->
-                CertificateFactory.getInstance("X.509").generateCertificate(input)
-            }
-        } else {
-            appContext.resources.openRawResource(R.raw.mqtt_ca).use { input ->
-                CertificateFactory.getInstance("X.509").generateCertificate(input)
-            }
-        }
+    private fun buildPinnedSslConfig(): MqttClientSslConfig {
+        val cf = CertificateFactory.getInstance("X.509")
         val store = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
             load(null, null)
-            setCertificateEntry("mqtt_ca", caCert)
         }
+
+        // Trust SECOM Root CA 2024
+        appContext.resources.openRawResource(R.raw.sc_root_2ca).use { input ->
+            val cert = cf.generateCertificate(input)
+            store.setCertificateEntry("sc_root", cert)
+        }
+
+        // Trust specific server cert (web.crt)
+        appContext.resources.openRawResource(R.raw.web).use { input ->
+            val cert = cf.generateCertificate(input)
+            store.setCertificateEntry("web_cert", cert)
+        }
+
         val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply {
             init(store)
         }
         return MqttClientSslConfig.builder()
             .trustManagerFactory(tmf)
+            .hostnameVerifier { _, _ -> true }
             .build()
     }
 
