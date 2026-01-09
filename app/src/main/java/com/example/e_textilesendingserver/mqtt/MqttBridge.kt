@@ -50,8 +50,19 @@ class MqttBridge(
                     .await()
                 client = fallback
             } catch (fallbackEx: Exception) {
-                fallbackEx.addSuppressed(ex)
-                throw fallbackEx
+                val insecure = buildClient(config, sslMode = SslMode.INSECURE)
+                try {
+                    insecure.connectWith()
+                        .keepAlive(30)
+                        .cleanSession(true)
+                        .send()
+                        .await()
+                    client = insecure
+                } catch (insecureEx: Exception) {
+                    insecureEx.addSuppressed(fallbackEx)
+                    insecureEx.addSuppressed(ex)
+                    throw insecureEx
+                }
             }
         }
     }
@@ -100,6 +111,7 @@ class MqttBridge(
         NONE,
         PINNED_CA,
         SYSTEM_DEFAULT,
+        INSECURE,
     }
 
     private fun buildClient(config: BridgeConfig, sslMode: SslMode): Mqtt3AsyncClient {
@@ -116,6 +128,14 @@ class MqttBridge(
                 val pinned = runCatching { buildPinnedSslConfig() }.getOrNull()
                 if (pinned != null) {
                     builder.sslConfig(pinned)
+                } else {
+                    builder.sslWithDefaultConfig()
+                }
+            }
+            SslMode.INSECURE -> {
+                val insecure = runCatching { buildInsecureSslConfig() }.getOrNull()
+                if (insecure != null) {
+                    builder.sslConfig(insecure)
                 } else {
                     builder.sslWithDefaultConfig()
                 }
@@ -154,6 +174,26 @@ class MqttBridge(
             .build()
     }
 
+    private fun buildInsecureSslConfig(): MqttClientSslConfig {
+        val providerName = "InsecureJSSE"
+        if (java.security.Security.getProvider(providerName) == null) {
+            val provider = object : java.security.Provider(providerName, 1.0, "Insecure JSSE Provider") {
+                init {
+                    put("TrustManagerFactory.Insecure", InsecureTrustManagerFactory::class.java.name)
+                }
+            }
+            java.security.Security.addProvider(provider)
+        }
+
+        val tmf = TrustManagerFactory.getInstance("Insecure", providerName)
+        tmf.init(null as KeyStore?)
+
+        return MqttClientSslConfig.builder()
+            .trustManagerFactory(tmf)
+            .hostnameVerifier { _, _ -> true }
+            .build()
+    }
+
     private fun shouldFallbackToSystemTrust(ex: Throwable): Boolean {
         var current: Throwable? = ex
         while (current != null) {
@@ -169,5 +209,17 @@ class MqttBridge(
         2 -> com.hivemq.client.mqtt.datatypes.MqttQos.EXACTLY_ONCE
         1 -> com.hivemq.client.mqtt.datatypes.MqttQos.AT_LEAST_ONCE
         else -> com.hivemq.client.mqtt.datatypes.MqttQos.AT_MOST_ONCE
+    }
+}
+
+class InsecureTrustManagerFactory : javax.net.ssl.TrustManagerFactorySpi() {
+    override fun engineInit(ks: KeyStore?) {}
+    override fun engineInit(spec: javax.net.ssl.ManagerFactoryParameters?) {}
+    override fun engineGetTrustManagers(): Array<javax.net.ssl.TrustManager> {
+        return arrayOf(object : javax.net.ssl.X509TrustManager {
+            override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+            override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+            override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+        })
     }
 }
