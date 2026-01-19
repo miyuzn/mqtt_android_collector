@@ -15,6 +15,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
@@ -364,7 +365,7 @@ class BridgeController(
                 attempts = max(1, attempts),
                 gapSec = max(0.0, gap),
                 timeoutSec = max(0.1, timeout),
-                broadcastAddrs = null // defaults to 255.255.255.255
+                broadcastAddrs = null // defaults to all broadcast addresses
             )
             
             discoveries.forEach { item ->
@@ -565,7 +566,7 @@ class BridgeController(
     }
 
     private suspend fun resolveIpWithDiscovery(dn: String): Triple<String?, List<JSONObject>, List<String>> {
-        val targets = listOf("255.255.255.255")
+        val targets = getAllBroadcastAddresses()
         val discoveries = discoverDevices(
             attempts = 2,
             gapSec = 0.15,
@@ -612,7 +613,7 @@ class BridgeController(
         socket.soTimeout = (timeoutSec * 1000).toInt()
 
         try {
-            val targets = broadcastAddrs ?: listOf("255.255.255.255")
+            val targets = broadcastAddrs ?: getAllBroadcastAddresses()
             val magic = "GCU_DISCOVER".toByteArray(Charsets.US_ASCII)
             val packet = DatagramPacket(magic, magic.size)
 
@@ -663,6 +664,29 @@ class BridgeController(
             runCatching { socket.close() }
         }
         return@withContext results
+    }
+
+    private fun getAllBroadcastAddresses(): List<String> {
+        val addresses = mutableSetOf<String>()
+        addresses.add("255.255.255.255") // Always include global broadcast
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            if (interfaces != null) {
+                while (interfaces.hasMoreElements()) {
+                    val networkInterface = interfaces.nextElement()
+                    if (networkInterface.isLoopback || !networkInterface.isUp) continue
+                    for (interfaceAddress in networkInterface.interfaceAddresses) {
+                        val broadcast = interfaceAddress.broadcast
+                        if (broadcast != null) {
+                            broadcast.hostAddress?.let { addresses.add(it) }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error resolving broadcast addresses: ${e.message}")
+        }
+        return addresses.toList()
     }
 
     private fun normalizeDn(value: String?): String {
